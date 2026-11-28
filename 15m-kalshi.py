@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 from urllib.parse import urlparse, urlencode
 from arch import arch_model
+from collections import deque
 
 from PIL import Image, ImageTk
 
@@ -24,6 +25,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import numpy as np
 
 from datetime import datetime, timezone
+import sys
 
 try:
     from dotenv import load_dotenv
@@ -38,13 +40,17 @@ COINBASE_URL = 'https://api.exchange.coinbase.com'
 KELLY_FRACTION = 0.25
 DEFAULT_FEE_CENTS = '0'
 
+if getattr(sys, "frozen", False):
+    project_dir = Path(sys.executable).resolve().parent.parent
+else:
+    project_dir = Path(__file__).resolve().parent
+
+files_dir = project_dir
+
 project_root = Path(__file__).resolve().parent
 
-#SETTINGS_FILE = project_root / "files/.kellykalshi_settings.json"
-#LAST_ORDER_FILE = project_root / "files/.kellykalshi_exit_state.json"
-
-SETTINGS_FILE = Path.home() / ".kellykalshi_settings.json"
-LAST_ORDER_FILE = Path.home() / ".kellykalshi_exit_state.json"
+SETTINGS_FILE = project_dir / "files/.kellykalshi_settings.json"
+LAST_ORDER_FILE = project_dir / "files/.kellykalshi_exit_state.json"
 
 KELLY_QUARTER_FRACTION = 0.25
 
@@ -576,7 +582,22 @@ class ForecastEstimator:
             probabilities = 1 - probabilities
 
         return float(np.mean(probabilities))
-    
+
+class MetricCalculator:
+    def __init__(self):
+        self.percent_changes = deque(maxlen = 60)
+
+    def get_std(self):
+        if (len(self.percent_changes) < 2):
+            return None
+        return np.std(self.percent_changes,ddof=1)
+
+    def add_data(self,percent_change):
+        self.percent_changes.append(float(percent_change))
+
+    def reset_data(self):
+        self.percent_changes = deque(maxlen = 60)
+
 class LoopApp:
     def __init__(self, root):
         self.root = root
@@ -615,21 +636,19 @@ class LoopApp:
     def build_ui(self):
         self.build_layout()
         self.build_test()
+        self.build_extensions()
         self.build_text_box()
         self.build_auth()
-        self.build_kelly_calculator()
-        self.build_market_view()
         self.build_position_monitor()
         self.build_last_order_view()
-        self.build_other_settings()
-        self.print_cat()
 
     def build_layout(self):
         self.paned_window = ttk.PanedWindow(root, orient="horizontal")
         self.paned_window.pack(fill="both", expand=True, padx=5, pady=5)
-        self.panel1 = tk.Frame(self.paned_window)
-        self.panel2 = tk.Frame(self.paned_window)
-        self.paned_window.add(self.panel1, weight=2)
+        self.panel1 = ttk.Frame(self.paned_window)
+        self.panel2 = ttk.Frame(self.paned_window)
+        self.panel3 = ttk.Frame(self.paned_window)
+        self.paned_window.add(self.panel1, weight=1)
         self.paned_window.add(self.panel2, weight=1) 
 
     def build_test(self):
@@ -661,6 +680,71 @@ class LoopApp:
         self.button_two = ttk.Radiobutton(row, text='SELL', variable=self.monitor_side, value='sell',
                         command=None)
         self.button_two.pack(side='left', padx=5)
+
+        row = ttk.Frame(frame); row.pack(fill='x', pady=(6, 2))
+        ttk.Label(row, text='Estimation method: ', width = 17).pack(side='left')
+        
+        self.estimation_method = tk.StringVar(value="Standard Logistical")
+
+        self.estimation_method_combo = ttk.Combobox(
+        row,
+        textvariable=self.estimation_method,
+        values=[
+            "Standard Logistical", "Monte Carlo", "Garche"
+        ],
+        state="readonly",
+        width=18
+        )
+        self.estimation_method_combo.pack(side="left")
+
+        ttk.Label(row, text="Kelly Fraction:", width=14).pack(side="left")
+        self.kelly_fraction = tk.StringVar(value="Quarter (25%)")
+        self.kelly_fraction_combo = ttk.Combobox(
+        row,
+        textvariable=self.kelly_fraction,
+        values=[
+            "Full (100%)",
+            "Half (50%)",
+            "Quarter (25%)",
+        ],
+        state="readonly",
+        width=18
+        )
+        self.kelly_fraction_combo.pack(side="left")
+
+        ttk.Label(row, text='Series ticker:', width = 14).pack(side='left')
+        self.series_ticker_entry = tk.StringVar(value="KXBTC15M")
+
+        self.series_ticker_entry_combo = ttk.Combobox(
+        row,
+        textvariable=self.series_ticker_entry,
+        values=[
+            "KXBTC15M",
+            "KXETH15M",
+            "KXSOL15M",
+            "KXXRP15M"
+        ],
+        state="readonly",
+        width=18
+        )
+        self.series_ticker_entry_combo.pack(side="left")
+
+    def build_extensions(self):
+        frame = ttk.LabelFrame(self.panel1, text='Extensions', padding=10)
+        frame.pack(fill='x', pady=5)
+        row = ttk.Frame(frame); row.pack(fill='x', pady=(6, 2))
+        
+        self.enable_market_switching = tk.BooleanVar(value=False)
+        self.enable_market_switching_button = ttk.Checkbutton(row, text='Market switching',variable=self.enable_market_switching, onvalue=1, offvalue=0, command=None)
+        self.enable_market_switching_button.pack(side='left')
+
+        self.use_updated_price = tk.BooleanVar(value=False)
+        self.use_updated_price_button = ttk.Checkbutton(row, text='Use updated price',variable=self.use_updated_price, onvalue=1, offvalue=0, command=None)
+        self.use_updated_price_button.pack(side='left')
+
+      #  self.enable_minute_checking = tk.BooleanVar(value=False)
+      #  self.enable_minute_checking_button = ttk.Checkbutton(row, text='Minute checking',variable=self.enable_minute_checking, onvalue=1, offvalue=0, command=None)
+      #  self.enable_minute_checking_button.pack(side='left')
 
     def start_test_loop(self):
         self.save_settings()
@@ -724,6 +808,7 @@ class LoopApp:
         self.button_two.configure(state='disabled')
         self.estimation_method_combo.configure(state='disabled')
         self.enable_market_switching_button.configure(state='disabled')
+        self.use_updated_price_button.configure(state='disabled')
         
 
     def reenable_all_buttons(self):
@@ -743,11 +828,15 @@ class LoopApp:
         self.button_two.configure(state='normal')
         self.estimation_method_combo.configure(state='normal')
         self.enable_market_switching_button.configure(state='normal')
+        self.use_updated_price_button.configure(state='normal')
+                
 
     def test_loop(self, interval, series_ticker, multiplier, tp, sl, api, bal_min, bal_max):
         self.insert_request_text(f"Began execution with {multiplier:.2f} kelly wager multiplier, {series_ticker} TICKER, {(tp*100):.2f}% take profit, {(sl*100):.2f}% stop loss amount, ${bal_min:.2f} minimum, and ${bal_max:.2f} max.")
 
         ticker = series_ticker
+        enable_market_switching = self.enable_market_switching.get()
+       # enable_minute_checking = self.enable_minute_checking.get()
 
         if self.monitor_side.get() == 'buy':
             loop_state = MONITOR_STATUS_1
@@ -762,38 +851,17 @@ class LoopApp:
             self.insert_request_text(f'{loop_state} in {ticker}')
 
             try:
-                check_balance = Decimal(self.balance)
-                self.insert_request_text(f"Current balance received: ${check_balance:.2f}") 
-            except (InvalidOperation, ValueError):
-                raise ValueError('balance invalid')
-            
-            if (check_balance <= bal_min):
-                self.insert_request_text(f"Balance {check_balance} falls under minimum of ${bal_min:.2f}, aborting.")
-                return
-            if (check_balance >= bal_max):
-                self.insert_request_text(f"Balance {check_balance} above maximum of ${bal_max:.2f}, aborting.")
-                return
-            
-            self.loop_index += 1
-
-            try:
                 self.update_on_loop(api)
             except Exception as exc:
                 self.insert_request_text(str(exc))
                 continue
 
+            self.validate_balance(bal_min,bal_max)
+
             if loop_state == MONITOR_STATUS_1:
                 try:
                     market_data, market_ticker = self.get_market_data_and_ticker(api, ticker)
-
-                    minutes_remaining = self.get_minutes_remaining(market_data)
-                    if (minutes_remaining < 3): 
-                        #self.print_cat()
-                        self.insert_request_text(f'{minutes_remaining:.2f} minutes left. Buying disabnled.')
-                        choices = ["(˶ˆᗜˆ˵)", "o3<", "(｡· ⩊ ·｡) ?", "mrp", "mreow", "(˶>⩊<˶)", "GRRF", "WUF", "BLERK!", "HONLK", "ฅ(•ㅅ•❀)ฅ ", "( • ⩊ • ) ", "   ᓚ₍⑅^..^₎♡"]
-                        random_item = random.choice(choices)
-                        self.insert_request_text(f'{random_item}')
-                        continue
+                    self.check_minutes(market_data)
                     self.validate_market_for_monitoring(api, market_ticker)
                     yes_estimate = self.get_side_win_estimates(market_data)
                     yes_price_cents = self.get_contract_price_cents(market_data)
@@ -801,45 +869,19 @@ class LoopApp:
                     count, limit, fee = self.get_contract_count_limit_and_fee(wager, limit)
                     estimated_total = count * (limit + fee) 
                     self.verify_balance(api, market_ticker, estimated_total)
-                    self.attempt_order(api, market_data, side, market_ticker, count, limit)
+                    fill_count, client_order_id = self.attempt_order(api, market_data, side, market_ticker, count, limit)
+                    self.review_order(fill_count, side, limit, client_order_id, market_ticker)
+                    self.insert_request_text('Switching loop state to monitor order...')
+                    loop_state = MONITOR_STATUS_2
+         
                 except ChangeMarketError as ch:
-                    enable_market_switching = self.enable_market_switching.get()
-                    if not enable_market_switching: continue
-                    minutes_remaining = self.get_minutes_remaining(market_data)
-                    #self.print_cat()
-                    if (minutes_remaining < 5): 
-                        self.insert_request_text(f'Would switch markets but there are {minutes_remaining:.2f} minutes left sis.')
-                        choices = ["o3o", "o3<", "hi", "mrp", "mreow", "maow"]
-                        random_item = random.choice(choices)
-                        self.insert_request_text(f'{random_item}')
-                        choices_key = [1,2,3]
-                        random_key = random.choice(choices_key)
-                        if (random_key == 1):
-                            self.print_cat()
-                        elif (random_key == 2):
-                            self.print_horse()
-                        continue
-                    
-                    tickers = [
-                        "KXBTC15M",
-                        "KXETH15M",
-                        "KXSOL15M",
-                        "KXXRP15M"
-                    ]
-
-                    current_index = tickers.index(ticker)
-                    next_index = (current_index + 1) % len(tickers)
-
-                    ticker = tickers[next_index]
-
-                    self.insert_request_text(f'Switching to {ticker}')
+                    if enable_market_switching: 
+                        ticker = self.switch_markets(ticker)
                     continue
                 except Exception as exc:
                     self.insert_request_text(str(exc) + ' Restarting.')
                     continue
 
-                self.insert_request_text('Switching loop state to monitor order...')
-                loop_state = MONITOR_STATUS_2
                 continue
             else:
                 order_side = self.last_order_side
@@ -852,12 +894,20 @@ class LoopApp:
 
                 try:
                     self.validate_market_for_positions(api, market_ticker)
-                    _, second_state_market_ticker = self.get_market_data_and_ticker(api, ticker)
+                    market_data, second_state_market_ticker = self.get_market_data_and_ticker(api, ticker)
                     if second_state_market_ticker != market_ticker:
                         self.insert_request_text('Current market does not match market purchased order on. Restarting with MONITOR_STATUS_1.')
                         loop_state = MONITOR_STATUS_1
                         continue
-                    self.attempt_sell(api,tp,sl,order_side,market_ticker)
+                    yes_estimate = self.get_side_win_estimates(market_data)
+                    if order_side == 'yes':
+                        self.insert_request_text(f"Up win estimate: {(yes_estimate * 100):.2f}%")           
+                    else:
+                        self.insert_request_text(f"Down win estimate: {((1 - yes_estimate) * 100):.2f}%")
+                    bid, qty = self.get_current_bid(api, market_ticker, order_side)
+                    self.review_bid(tp, sl, bid)
+                    fill_count = self.attempt_sell(api,order_side,market_ticker,bid,qty,market_data)
+                    self.review_sell(fill_count, qty)
                 except MonitorStateError as mon:
                     self.insert_request_text(str(mon) + ' Restarting with MONITOR_STATUS_1.')
                     loop_state = MONITOR_STATUS_1
@@ -997,7 +1047,8 @@ class LoopApp:
                 "enable_market_switching": self.enable_market_switching.get(),
                 "estimation_method": str(self.estimation_method.get()),
                 "buy_or_sell": str(self.monitor_side.get()),
-                "series_ticker": str(self.series_ticker_entry.get())
+                "series_ticker": str(self.series_ticker_entry.get()),
+                "use_updated_price":self.use_updated_price.get(),
             }
     
             with open(SETTINGS_FILE, "w", encoding="utf-8") as file:
@@ -1034,8 +1085,7 @@ class LoopApp:
 
             series_ticker = settings.get("series_ticker")
             if series_ticker in ("KXBTC15M",
-                                    "KXETH15M",
-                                    "KXSOL15M",
+                                    "KXETH15M","KXSOL15M",
                                     "KXXRP15M"):
                 self.series_ticker_entry.set(series_ticker)
 
@@ -1044,6 +1094,8 @@ class LoopApp:
                 self.environment.set(environment)
 
             self.enable_market_switching.set(settings.get("enable_market_switching", False))
+
+            self.use_updated_price.set(settings.get("use_updated_price",False))
 
             self.monitor_side.set(settings.get("buy_or_sell", 'buy'))
 
@@ -1072,50 +1124,6 @@ class LoopApp:
         self.insert_request_text(text)
         messagebox.showinfo(head, text)
         raise ValueError(text)
-
-    def build_kelly_calculator(self):
-        frame = ttk.LabelFrame(self.panel1, text='Kelly Criterion', padding=10)
-        frame.pack(fill='x', pady=9)
-
-        row = ttk.Frame(frame)
-        row.pack(fill="x", pady=(6, 2))
-        ttk.Label(row, text="Kelly Fraction:", width=14).pack(side="left")
-        self.kelly_fraction = tk.StringVar(value="Quarter (25%)")
-        self.kelly_fraction_combo = ttk.Combobox(
-        row,
-        textvariable=self.kelly_fraction,
-        values=[
-            "Full (100%)",
-            "Half (50%)",
-            "Quarter (25%)",
-        ],
-        state="readonly",
-        width=18
-        )
-        self.kelly_fraction_combo.pack(side="left")
-
-    def build_market_view(self):
-        frame = ttk.LabelFrame(self.panel1, text='Create market orders', padding=10)
-        frame.pack(fill='x', pady=10)
-
-        row = ttk.Frame(frame); row.pack(fill='x')
-
-        ttk.Label(row, text='Series ticker:', width = 14).pack(side='left')
-        self.series_ticker_entry = tk.StringVar(value="KXBTC15M")
-
-        self.series_ticker_entry_combo = ttk.Combobox(
-        row,
-        textvariable=self.series_ticker_entry,
-        values=[
-            "KXBTC15M",
-            "KXETH15M",
-            "KXSOL15M",
-            "KXXRP15M",
-        ],
-        state="readonly",
-        width=18
-        )
-        self.series_ticker_entry_combo.pack(side="left")
 
     def build_position_monitor(self):
         frame = ttk.LabelFrame(self.panel1, text='Monitor order', padding=10)
@@ -1199,12 +1207,33 @@ class LoopApp:
         except (OSError, ValueError) as exc:
             return False
 
+    def validate_balance(self, bal_min, bal_max):
+        check_balance = Decimal(self.balance)
+        self.insert_request_text(f"Current balance received: ${check_balance:.2f}") 
+        
+        if (check_balance <= bal_min):
+            self.insert_request_text(f"Balance {check_balance} falls under minimum of ${bal_min:.2f}, aborting.")
+            return
+        if (check_balance >= bal_max):
+            self.insert_request_text(f"Balance {check_balance} above maximum of ${bal_max:.2f}, aborting.")
+            return
+
     def get_market_data_and_ticker(self, api, series_ticker):
         markets = api.markets(series_ticker)
         markets_data = markets['markets']
         market_data = markets_data[0]
         market_ticker = market_data['ticker'] #market_ticker, #actual_market, 
         return market_data, market_ticker
+
+    def check_minutes(self, market_data):
+        minutes_remaining = self.get_minutes_remaining(market_data)
+        if (minutes_remaining < 1): 
+            #self.print_cat()
+            self.insert_request_text(f'{minutes_remaining:.2f} minutes left. Do not buy anything.')
+            choices = ["(˶ˆᗜˆ˵)", "o3<", "(｡· ⩊ ·｡) ?", "mrp", "mreow", "(˶>⩊<˶)", "GRRF", "WUF", "BLERK!", "HONLK", "ฅ(•ㅅ•❀)ฅ ", "( • ⩊ • ) ", "   ᓚ₍⑅^..^₎♡"]
+            random_item = random.choice(choices)
+            self.insert_request_text(f'{random_item}')
+            return ValueError("Nya")
 
     def validate_market_for_monitoring(self, api, market_ticker):
         orders = api.get_pages('/portfolio/orders', 'orders', {'ticker': market_ticker})
@@ -1267,16 +1296,15 @@ class LoopApp:
         if not (wager > 0 and 0 < limit < 100 and fee >= 0):
             raise ValueError("Invalid value given.")
         quantized_limit = limit.quantize(Decimal("0.01"))
-        if limit != quantized_limit:
-            raise ValueError(f"Limit price ${limit:.2f} does not match quantized limit ${quantized_limit:.2f}.")
-        limit = limit / 100
-        count = int(wager // (limit + fee))
+        limit = quantized_limit / 100
+        count = Decimal(wager / (limit + fee))
 
-        if count < 1:
-            raise ValueError("Contract count < 1.")
 
-        if limit < 0.1:
-            raise ValueError("Limit < 0.1.")
+        #if count < 1:
+        #    raise ValueError("Contract count < 1.")
+
+        if (limit < 0.08) or (limit > 0.93):
+            raise ValueError("Limit < 0.08.")
 
         return count, limit, fee
 
@@ -1301,21 +1329,30 @@ class LoopApp:
 
     def attempt_order(self, api, market_data, preferred_side, market_ticker, count, preferred_limit):
         side_in_text = 'up' if preferred_side == 'yes' else 'down' #used
-        self.insert_request_text(f"Attempting purchase of {count} {side_in_text} contracts priced at {preferred_limit} cents each.")
-        order_id = str(uuid4()) 
+        self.insert_request_text(f"Attempting purchase of {count:.2f} {side_in_text} contracts priced at {preferred_limit} cents each.")
+        client_order_id = str(uuid4()) 
         updated_limit = market_price_cents(market_data, preferred_side)
         updated_limit = Decimal(updated_limit)
         updated_price = updated_limit / 100
-        self.insert_request_text(f"Updated price: ${updated_price:.2f}. Using original limit of ${(preferred_limit):.2f}.") 
-        order_result = api.make_order(market_ticker, preferred_side, count, preferred_limit, order_id, IMMEDIATE_OR_CANCEL, False)
+        if self.use_updated_price is True:
+            self.insert_request_text(f"Updated price: ${updated_price:.2f}. Using updated price limit of ${(updated_price):.2f}.") 
+            limit = updated_price
+        else:
+            self.insert_request_text(f"Updated price: ${updated_price:.2f}. Using original limit of ${(preferred_limit):.2f}.") 
+            limit = preferred_limit
 
-        if not (Decimal(str(order_result['fill_count'])) > 0.0):
+        order_result = api.make_order(market_ticker, preferred_side, count, limit, client_order_id, IMMEDIATE_OR_CANCEL, False)
+
+        return Decimal(str(order_result['fill_count'])), client_order_id
+
+    def review_order(self, fill_count, preferred_side, preferred_limit, client_order_id, market_ticker):
+        if not (fill_count > 0.0):
             raise ValueError('Failed to buy.')
         else:     
             side_in_text = 'up' if preferred_side == 'yes' else 'down'                
-            self.insert_request_text(f"Purchased {order_result['fill_count']} {side_in_text} contracts. Order ID: {order_result['client_order_id']}.")
+            self.insert_request_text(f"Purchased {fill_count} {side_in_text} contracts.")
 
-        self.save_last_order(order_id, preferred_side, preferred_limit, order_result['fill_count'], market_ticker)
+        self.save_last_order(client_order_id, preferred_side, preferred_limit, fill_count, market_ticker)
         self.load_last_order()
 
     def validate_market_for_positions(self, api, market_ticker):
@@ -1336,31 +1373,77 @@ class LoopApp:
         self.insert_request_text('Valid unsettled positions found. Proceeding...')
         self.insert_request_text(f'Monitoring {self.last_order_id}')
 
-    def attempt_sell(self, api, tp, sl, side_to_sell, market_ticker):
+    def get_current_bid(self, api, market_ticker, side_to_sell):
         count = Decimal(str(self.last_order_count))
-        original_price = Decimal(str(self.last_order_price))
-
         bid, liquidity = api.executable_bid(market_ticker, side_to_sell)
-
-        target = original_price * (1 + tp)
-        stop = original_price * (1 - sl)
-
-       # markets = api.markets(series_ticker)
-        #markets_data = markets['markets']
-        market_data = api.market(market_ticker)
-
-        minutes_remaining = self.get_minutes_remaining(market_data)
-        self.insert_request_text(f'Minutes remaining: {minutes_remaining:.2f}')
-        up_side_win_estimate = self.get_side_win_estimates(market_data)
 
         if bid is None:
             raise ValueError("Monitoring: no executable bid.")
 
-        reason = 'TAKE PROFIT' if bid >= target else 'STOP LOSS'
+        sellable_qty = min(count, liquidity).quantize(Decimal('0.01'), rounding='ROUND_DOWN')
+
+        if sellable_qty <= 0:
+            raise ValueError(f'Liquidity conflict in bid. Continuing. Count is {count} and liquidity is {liquidity}.')
+    
+        return bid, sellable_qty
+
+    def review_bid(self, tp, sl, bid):
+        original_price = Decimal(str(self.last_order_price))
+        target = original_price * (1 + tp)
+        stop = original_price * (1 - sl)
         percent_change = ((bid/original_price) - 1)
-        percent_change = Decimal(percent_change)
+        #ercent_change = Decimal(percent_change)
+       # metric_calculator.add_data(percent_change)
+       # std = metric_calculator.get_std()
+       # self.insert_request_text(f'Percent change std: {std}')
         self.insert_request_text(f'Current price: ${bid:.2f}; {percent_change * 100:.2f}%;')
-        self.last_order_price_change.config(text=f'${bid:.2f} ({percent_change * 100:.2f}%)')
+        self.last_order_price_change.config(text=f'${bid:.2f} ({percent_change * 100:.2f})')
+        
+        if stop < bid < target:
+            raise ValueError(f'Holding.')
+
+    def switch_markets(self, ticker):    
+        tickers = [
+            "KXBTC15M",
+            "KXETH15M",
+            "KXSOL15M",
+            "KXXRP15M",
+        ]
+
+        current_index = tickers.index(ticker)
+        next_index = (current_index + 1) % len(tickers)
+
+        new_ticker = tickers[next_index]
+
+        self.insert_request_text(f'Switching to {new_ticker}')
+
+        return new_ticker
+
+   # def verify_additional_requirements(self):
+        #count = Decimal(str(self.last_order_count))
+        #original_price = Decimal(str(self.last_order_price))
+
+        #bid, liquidity = api.executable_bid(market_ticker, side_to_sell)
+
+        #target = original_price * (1 + tp)
+        #stop = original_price * (1 - sl)
+
+        # markets = api.markets(series_ticker)
+        #markets_data = markets['markets']
+        #market_data = api.market(market_ticker)
+
+        #minutes_remaining = self.get_minutes_remaining(market_data)
+        #self.insert_request_text(f'Minutes remaining: {minutes_remaining:.2f}')
+        #up_side_win_estimate = self.get_side_win_estimates(market_data)
+
+        #if bid is None:
+        #    raise ValueError("Monitoring: no executable bid.")
+
+        #reason = 'TAKE PROFIT' if bid >= target else 'STOP LOSS'
+        #percent_change = ((bid/original_price) - 1)
+        #percent_change = Decimal(percent_change)
+        #self.insert_request_text(f'Current price: ${bid:.2f}; {percent_change * 100:.2f}%;')
+        #self.last_order_price_change.config(text=f'${bid:.2f} ({percent_change * 100:.2f}%)')
         #forecast_time = 0.083
 
         #if (minutes_remaining > forecast_time):
@@ -1370,68 +1453,84 @@ class LoopApp:
         #    self.insert_request_text(f'{forecast_time} min forecast: {(((forecast/original_price)-1) * 100):.2f}%.')
 
         # forecast 
-        last_percent_change = self.last_percent_change
-        self.last_percent_change = percent_change
+        #last_percent_change = self.last_percent_change
+        #self.last_percent_change = percent_change
 
-        if stop < bid < target:
-            raise ValueError(f'Holding.')
+        #if stop < bid < target:
+            #raise ValueError(f'Holding.')
         
             #if (bid > original_price):
             #    if (minutes_remaining > 5) and (percent_change >= 0.3):
             #        reason = 'TAKE PROFIT'
-           #         self.insert_request_text(f'Bypassing target and stop values as (minutes_remaining > 5) and ((bid - original_price) >= 0.3).')
+            #         self.insert_request_text(f'Bypassing target and stop values as (minutes_remaining > 5) and ((bid - original_price) >= 0.3).')
             #    else:
-           #         raise ValueError(f'Holding.')
-          #  elif (bid < original_price):
-          #      if (minutes_remaining < 5) and (bid < 0.5):
-          #          self.insert_request_text(f'Bypassing target and stop values as (minutes_remaining < 3) and (bid < 0.5).')
-           #     else:
-          #          raise ValueError(f'Holding.')
-         #   elif (bid == original_price):
-         #       raise ValueError(f'Holding.')
+            #         raise ValueError(f'Holding.')
+            #  elif (bid < original_price):
+            #      if (minutes_remaining < 5) and (bid < 0.5):
+            #          self.insert_request_text(f'Bypassing target and stop values as (minutes_remaining < 3) and (bid < 0.5).')
+            #     else:
+            #          raise ValueError(f'Holding.')
+            #   elif (bid == original_price):
+            #       raise ValueError(f'Holding.')
 
-       # if bid <= stop:
-       #     hold_min = 10
-       #     if (minutes_remaining > hold_min):
-      #          self.insert_request_text(f'Bypassing target and stop values as (minutes_remaining > {hold_min}).')
-      #          raise ValueError(f'Holding.')
-       #     else:
-      #          if last_percent_change is not None:
-      #              diff = percent_change - last_percent_change 
-       #             self.last_percent_change = None
-      #              if (diff < -0.2):
-      #                  raise ValueError(f'Holding due to volatility.')
+        # if bid <= stop:
+        #     hold_min = 10
+        #     if (minutes_remaining > hold_min):
+        #          self.insert_request_text(f'Bypassing target and stop values as (minutes_remaining > {hold_min}).')
+        #          raise ValueError(f'Holding.')
+        #     else:
+        #          if last_percent_change is not None:
+        #              diff = percent_change - last_percent_change 
+        #             self.last_percent_change = None
+        #              if (diff < -0.2):
+        #                  raise ValueError(f'Holding due to volatility.')
 
-      #  if bid >= target:
-      #      if (minutes_remaining < 5):
-      #          self.insert_request_text(f'Bypassing target and stop values as (minutes_remaining < 5).')
-       #         raise ValueError(f'Holding.')
+        #  if bid >= target:
+        #      if (minutes_remaining < 5):
+        #          self.insert_request_text(f'Bypassing target and stop values as (minutes_remaining < 5).')
+        #         raise ValueError(f'Holding.')
 
-        self.insert_request_text(f'Attempting to sell to {reason}.')
+        #self.insert_request_text(f'Attempting to sell to {reason}.')
 
-        sellable_qty = min(count, liquidity).quantize(Decimal('0.01'), rounding='ROUND_DOWN')
-        if sellable_qty <= 0:
-            raise ValueError(f'Liquidity conflict in bid. Continuing. Count is {count} and liquidity is {liquidity}.')
+        #sellable_qty = min(count, liquidity).quantize(Decimal('0.01'), rounding='ROUND_DOWN')
+       # if sellable_qty <= 0:
+           # raise ValueError(f'Liquidity conflict in bid. Continuing. Count is {count} and liquidity is {liquidity}.')
         
+    def attempt_sell(self, api, side_to_sell, market_ticker, bid, qty, market_data):
+        updated_limit = market_price_cents(market_data, side_to_sell)
+        updated_limit = Decimal(updated_limit)
+        updated_price = updated_limit / 100
+
+        if self.use_updated_price and updated_price > bid:
+            self.insert_request_text(f"Updated price: ${updated_price:.2f}. Using updated price limit of ${(updated_price):.2f}.") 
+            limit = updated_price
+        else:
+            self.insert_request_text(f"Updated price: ${updated_price:.2f}. Using original limit of ${(bid):.2f}.") 
+            limit = bid
+
         sell_order_id = str(uuid4())
         exit_side = "no" if side_to_sell == "yes" else "yes"
-        exit_price = Decimal("1") - bid
+        exit_price = Decimal("1") - limit
 
         result = api.make_order(
             market_ticker,
             exit_side,
-            sellable_qty,
+            qty,
             exit_price,
             sell_order_id,
             IMMEDIATE_OR_CANCEL,
             True
         )
+
         fill_count = Decimal(str(result['fill_count']))
 
+        return fill_count
+
+    def review_sell(self, fill_count, qty):
         if not (fill_count > 0.0):
             raise ValueError(f'Failed to sell, restarting loop.')
         else:
-            new_count = count - fill_count
+            new_count = qty - fill_count
             self.insert_request_text(f'Sold {fill_count} contracts. {new_count} left.')
             self.save_last_order(self.last_order_id, self.last_order_side, self.last_order_price, new_count, self.last_order_market_ticker)
             self.load_last_order()
@@ -1449,31 +1548,6 @@ class LoopApp:
         current_time = datetime.now(timezone.utc)
 
         return max(0, (close_time - current_time).total_seconds() / 60)
-
-    def build_other_settings(self):
-        frame = ttk.LabelFrame(self.panel1, text='Other settings', padding=10)
-        frame.pack(fill='x', pady=5)
-        row = ttk.Frame(frame); row.pack(fill='x', pady=(6, 2))
-
-        self.enable_market_switching = tk.BooleanVar(value=False)
-        self.enable_market_switching_button = tk.Checkbutton(row, text='Enable market switching',variable=self.enable_market_switching, onvalue=1, offvalue=0, command=None)
-        self.enable_market_switching_button.pack(side='left')
-
-        row = ttk.Frame(frame); row.pack(fill='x', pady=(6, 2))
-        ttk.Label(row, text='Estimation method: ', width = 15).pack(side='left')
-        
-        self.estimation_method = tk.StringVar(value="Standard Logistical")
-
-        self.estimation_method_combo = ttk.Combobox(
-        row,
-        textvariable=self.estimation_method,
-        values=[
-            "Standard Logistical", "Monte Carlo", "Garche"
-        ],
-        state="readonly",
-        width=18
-        )
-        self.estimation_method_combo.pack(side="left")
 
     def print_cat(self):
         #self.print_horse()
